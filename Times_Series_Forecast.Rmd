@@ -1,0 +1,152 @@
+---
+title: "Time Series Forecast"
+author: "Uche Kalu"
+date: "4/15/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+### The Goal of this Analysis is to predict the future as accurately as possible based on current information available .
+
+**When forecasting time series data, the aim is to estimate how the sequence of observation will continue into the future**
+
+```{r message=FALSE, warning=FALSE}
+library(modeltime)   
+library(tidymodels)   
+library(tidyverse)    
+library(timetk)
+library(lubridate)   
+library(glmnet)
+```
+
+### DATA
+
+The Dataset we will be using is [**bike_sharing_daily**]{.ul}. It is a built-in dataset from timetk package.
+
+We will be using only two variables from the dataset - dteday and cnt columns. cnt variable is the response variable
+
+```{r results='hide'}
+View(bike_sharing_daily)    
+
+mydata <- bike_sharing_daily %>%
+  select(dteday, cnt)    
+
+mydata
+```
+
+**This displays an interactive time series chart using the stated variables**
+
+```{r fig.width=11, fig.height=6}
+mydata %>% plot_time_series(dteday, cnt)
+```
+
+### TRAIN / TEST SPLITS
+
+We will split the dataset into training and testing data by using the last 3 months in the data as testing set
+
+```{r warning=FALSE, message=FALSE}
+splits <- time_series_split(mydata, assess = "3 months",
+                            cumulative = TRUE) 
+```
+
+**Visualizing the training and testing data**
+
+```{r fig.width=12, fig.height=6}
+splits %>%
+  tk_time_series_cv_plan() %>%
+  plot_time_series_cv_plan(dteday, cnt)  
+
+```
+
+### Creating FORECAST using [Auto-Arima]{.ul} model, [Prophet]{.ul} model and [GLM]{.ul} machine learning algorithm
+
+#### AUTO ARIMA model (this is an auto-regressive forecasting algorithm)
+
+```{r message=FALSE, results='hide'}
+mymodel <- arima_reg() %>%
+  set_engine("auto_arima") %>%
+  fit(cnt ~ dteday, training(splits))   
+
+```
+
+#### Facebook Prophet model
+
+```{r message=FALSE, results='hide'}
+ourmodel <- prophet_reg(seasonality_yearly = TRUE) %>%
+  set_engine("prophet") %>%
+  fit(cnt ~ dteday, training(splits))
+
+```
+
+#### GLM Machine Learning algorithm
+
+```{r message=FALSE, results='hide'}
+yrmodel <- linear_reg(penalty = 0.01) %>%
+  set_engine("glmnet") %>%
+  fit(cnt ~ wday(dteday, label = TRUE) +
+        month(dteday, label = TRUE) +
+        as.numeric(dteday), training(splits))
+```
+
+### Using MODELTIME package to organize and compare our models
+
+**Create a Modeltime Table (this helps to organize our models)**
+
+```{r}
+hismodel <- modeltime_table(mymodel, ourmodel, yrmodel)  
+hismodel
+```
+
+### Calibration.
+
+**Here we calculate predictions and residuals(error) for the test data**
+
+```{r}
+mycalib <- hismodel %>%
+  modeltime_calibrate(testing(splits))  
+mycalib
+```
+
+### Viewing Accuracy.
+
+**Lets see the accuracy from our testing dataset predictions**
+
+ae - Mean Absolute Error (is the average error aggregated for across d prediction. d smaller d value, d better); we see that ARIMA model is d worst
+
+rsq - R-Squared value (Its value is from 0 to 1. the higher d value, d better): we see PROPHET model is d best
+
+```{r}
+mycalib %>% modeltime_accuracy() 
+```
+
+### Visualization of the Testing data
+
+**Displays an interactive time series chart using the three models on training and testing data**
+
+We see that ARIMA model is not following d time series trend unlike the other models so you can disable ARIMA in d legend bar to remove it from the chart
+
+```{r fig.width=12, fig.height=6}
+mycalib %>%
+  modeltime_forecast(new_data = testing(splits),
+                     actual_data = mydata) %>%  
+  plot_modeltime_forecast()
+```
+
+### Forecast The Future
+
+**We will forecast for the next 3 months**
+
+We re-train the three models on the full dataset (not the training data) so we get the most accurate predictions in the future
+
+```{r message=FALSE, results='hide'}
+myforecast <- mycalib %>%
+  modeltime_refit(mydata) %>%      
+  modeltime_forecast(h = "3 months", actual_data = mydata)   
+
+```
+
+```{r fig.height=6, fig.width=12}
+myforecast %>%
+  plot_modeltime_forecast()
+```
